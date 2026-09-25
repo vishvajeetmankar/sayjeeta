@@ -70,3 +70,17 @@ OUTPUT FORMAT (strict JSON):
 }}
 
 Sirf valid JSON return karo, kuch aur text nahi. scenes array mein hamesha 6-8 items hone chahiye.
+
+STRICT JSON-FORMATTING RULES (follow exactly, this output is parsed by a machine):
+- Return ONLY one valid JSON object. Nothing before it, nothing after it.
+- Do not wrap the JSON in Markdown code fences (no ``` anywhere).
+- Do not add commentary, notes, or explanations before or after the JSON.
+- Every key must be followed by a colon and then a valid JSON value -- double-check every
+  line has correct `"key": value` syntax before finishing.
+- Escape every double-quote character that appears INSIDE a string value as \" -- this
+  matters most inside "story_script" and "description_hindi", which contain dialogue in
+  quotes.
+- Do not include literal line breaks inside a JSON string value; use \n if you need a break
+  inside "story_script".
+- The entire response must be parseable by a strict JSON parser (equivalent to Python's
+  json.loads()) with zero modification.
