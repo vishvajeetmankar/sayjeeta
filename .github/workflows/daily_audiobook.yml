@@ -44,50 +44,80 @@ jobs:
           echo "genre=$GENRE" >> "$GITHUB_OUTPUT"
           echo "skip=false" >> "$GITHUB_OUTPUT"
 
+      # --- Story generation. Everything after this explicitly requires success() ---
+      # (a step with a custom `if:` does NOT automatically inherit the default
+      # success()-only behavior -- that was the root cause of the FileNotFoundError
+      # cascade: a failed story step let generate_voice.py still run with garbage input.)
+
       - name: Generate story
+        id: story
         if: steps.queue.outputs.skip != 'true'
         env:
           SARVAM_API_KEY: ${{ secrets.SARVAM_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
-          python scripts/generate_story.py "${{ steps.queue.outputs.topic }}" "${{ steps.queue.outputs.genre }}" | tee story_log.txt
-          echo "slug=$(tail -1 story_log.txt)" >> "$GITHUB_ENV"
+          set -o pipefail
+          python scripts/generate_story.py \
+            "${{ steps.queue.outputs.topic }}" \
+            "${{ steps.queue.outputs.genre }}" | tee story_log.txt
+
+          SLUG_LINE=$(grep '^SLUG::' story_log.txt | tail -n 1)
+          if [ -z "$SLUG_LINE" ]; then
+            echo "❌ No SLUG:: marker found in story_log.txt -- story generation did not "
+            echo "   succeed cleanly. Failing this step instead of passing garbage downstream."
+            exit 1
+          fi
+          STORY_SLUG="${SLUG_LINE#SLUG::}"
+          if [ ! -f "stories/${STORY_SLUG}.json" ]; then
+            echo "❌ SLUG marker found ($STORY_SLUG) but stories/${STORY_SLUG}.json doesn't exist."
+            exit 1
+          fi
+          echo "slug=$STORY_SLUG" >> "$GITHUB_ENV"
 
       - name: Generate voice (Edge-TTS)
-        if: steps.queue.outputs.skip != 'true'
+        if: success() && steps.queue.outputs.skip != 'true'
         run: python scripts/generate_voice.py "$slug" "${{ steps.queue.outputs.genre }}"
 
       - name: Generate scene images + thumbnail
-        if: steps.queue.outputs.skip != 'true'
+        if: success() && steps.queue.outputs.skip != 'true'
         run: python scripts/generate_image.py "$slug"
 
       - name: Generate karaoke captions
-        if: steps.queue.outputs.skip != 'true'
+        if: success() && steps.queue.outputs.skip != 'true'
         continue-on-error: true   # non-critical: video still uploads without captions if this fails
         run: python scripts/generate_captions.py "$slug"
 
       - name: Render final video
-        if: steps.queue.outputs.skip != 'true'
+        if: success() && steps.queue.outputs.skip != 'true'
         run: python scripts/make_video.py "$slug" "${{ steps.queue.outputs.genre }}"
 
       - name: Upload to YouTube (private + scheduled)
-        if: steps.queue.outputs.skip != 'true'
+        if: success() && steps.queue.outputs.skip != 'true'
         env:
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
         run: python scripts/upload_youtube.py "$slug"
 
-      - name: Commit updated topics.csv + queue status
-        if: steps.queue.outputs.skip != 'true'
+      # Only reached if the upload step actually succeeded -- this is what makes it safe
+      # for the NEXT trigger (morning/evening) to know whether to retry this topic or move on.
+      - name: Mark topic done (only after a real successful upload)
+        if: success() && steps.queue.outputs.skip != 'true'
+        run: python scripts/finalize_success.py "${{ steps.queue.outputs.topic }}"
+
+      - name: Commit topics.csv + queue status
+        if: success() && steps.queue.outputs.skip != 'true'
         run: |
           git config user.name "audiobook-bot"
           git config user.email "bot@sayjeeta.local"
           git add topics.csv queue/status.json
           git commit -m "Auto: processed story $slug" || echo "nothing to commit"
-          git push
+          # Pull-rebase before pushing in case the two daily triggers ever overlap and both
+          # try to push -- retries once after rebasing instead of just failing outright.
+          git pull --rebase origin "${GITHUB_REF_NAME}" || true
+          git push || (git pull --rebase origin "${GITHUB_REF_NAME}" && git push)
 
-      # --- Everything below runs regardless of success/failure ---
+      # --- Diagnostics: run regardless of success/failure ---
 
       - name: Upload debug logs on failure
         if: failure()
