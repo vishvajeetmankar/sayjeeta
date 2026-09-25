@@ -10,6 +10,11 @@ ERROR HANDLING:
   clear error instead of silently producing a broken pipeline downstream
 - If Sarvam fails after retries -> hard fail (no story = nothing else can run, workflow should stop)
 - If OpenRouter polish fails after retries -> falls back to the unpolished draft (degraded, not blocked)
+- The DRAFT step retries up to 3x on MALFORMED JSON specifically (not just network errors):
+  attempt 1 asks Sarvam for schema-constrained structured output (response_format), and if
+  that's rejected or still comes back malformed, attempts 2-3 fall back to plain prompted JSON
+  with a fresh generation each time -- a bad JSON parse used to be treated as an immediate
+  fatal error even though re-asking the model usually just works.
 """
 import os, json, re, sys, time, requests
 
@@ -27,6 +32,41 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 REQUIRED_KEYS = ["title_hindi", "hook_line", "story_script", "description_hindi",
                   "scenes", "thumbnail_prompt_english", "tags_english", "hashtags_english"]
+
+# Structured-output schema for the OpenAI-compatible response_format param (Sarvam docs
+# confirm support for this on /chat/completions). Kept lenient (strict tied to what
+# validate_story() actually enforces) so a model that omits an optional field like
+# category_id doesn't get its whole response rejected by schema validation.
+STORY_JSON_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "title_hindi": {"type": "string"},
+        "hook_line": {"type": "string"},
+        "story_script": {"type": "string"},
+        "description_hindi": {"type": "string"},
+        "scenes": {
+            "type": "array",
+            "minItems": 4,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "scene_number": {"type": "integer"},
+                    "position_pct": {"type": "integer"},
+                    "image_prompt_english": {"type": "string"},
+                },
+                "required": ["scene_number", "position_pct", "image_prompt_english"],
+            },
+        },
+        "thumbnail_prompt_english": {"type": "string"},
+        "tags_english": {"type": "array", "items": {"type": "string"}},
+        "hashtags_english": {"type": "array", "items": {"type": "string"}},
+        "category_id": {"type": "string"},
+    },
+    "required": ["title_hindi", "hook_line", "story_script", "description_hindi",
+                 "scenes", "thumbnail_prompt_english", "tags_english", "hashtags_english"],
+}
 
 class StoryGenError(Exception):
     pass
@@ -73,15 +113,26 @@ def _post_with_retry(url, headers, payload, label, max_retries=3):
             time.sleep(wait)
     raise StoryGenError(f"{label} failed after {max_retries} retries: {last_err}")
 
-def call_sarvam(prompt: str) -> str:
+def call_sarvam(prompt: str, use_schema: bool = True) -> str:
+    payload = {
+        "model": SARVAM_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.3,  # lowered from 0.85 -- schema-constrained JSON needs low
+                              # randomness, not creative variety; 0.85 was making the
+                              # model drift out of valid JSON syntax more often
+        "max_tokens": 6000,
+        "reasoning_effort": None,
+    }
+    if use_schema:
+        payload["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {"name": "sayjeeta_story", "strict": True, "schema": STORY_JSON_SCHEMA},
+        }
     return _post_with_retry(
         SARVAM_URL,
         {"api-subscription-key": SARVAM_API_KEY, "Content-Type": "application/json"},
-        {"model": SARVAM_MODEL, "messages": [{"role": "user", "content": prompt}],
-         "temperature": 0.85, "max_tokens": 6000,
-         "reasoning_effort": None},  # disable thinking mode -- keeps output fully in
-                                      # 'content' instead of splitting into 'reasoning_content'
-        "Sarvam",
+        payload,
+        f"Sarvam({'schema' if use_schema else 'plain'})",
     )
 
 def call_openrouter_polish(draft_json_str: str, genre: str) -> str:
@@ -131,15 +182,39 @@ def slugify(title: str) -> str:
     s = re.sub(r"[\s]+", "-", s)
     return s[:60] or "story"
 
+def generate_draft(prompt: str, max_attempts: int = 3) -> dict:
+    """
+    Retries on MALFORMED JSON (not just network errors) -- a bad parse from the model used
+    to be treated as an immediate fatal error, even though a fresh generation attempt very
+    often just succeeds on its own. Attempt 1 asks for schema-constrained structured output
+    (response_format); if that's rejected outright (some accounts/models don't support it)
+    or still comes back unparsable, attempts 2-3 fall back to plain prompted JSON with a
+    brand-new generation each time (temperature 0.3 still yields different output per call,
+    it's not literally re-sending the same broken request).
+    """
+    last_err = None
+    for attempt in range(1, max_attempts + 1):
+        use_schema = (attempt == 1)
+        try:
+            raw = call_sarvam(prompt, use_schema=use_schema)
+            data = extract_json(raw)
+            validate_story(data)
+            return data
+        except StoryGenError as e:
+            last_err = e
+            mode = "structured-output schema" if use_schema else "plain JSON prompting"
+            print(f"⚠️  Draft attempt {attempt}/{max_attempts} ({mode}) failed: {e}")
+            if attempt < max_attempts:
+                print("   Retrying with a fresh generation...")
+    raise StoryGenError(f"Draft generation failed after {max_attempts} attempts. Last error: {last_err}")
+
 def main(topic: str, genre: str):
     with open("prompts/story_prompt.txt", encoding="utf-8") as f:
         template = f.read()
     prompt = template.format(topic=topic, genre=genre)
 
     print(f"→ Draft pass ({SARVAM_MODEL})...")
-    draft_raw = call_sarvam(prompt)          # hard-fails the whole run if this errors -- correct,
-    draft = extract_json(draft_raw)          # there's no usable story without it
-    validate_story(draft)
+    draft = generate_draft(prompt)   # hard-fails the whole run only after 3 genuine attempts
 
     print("→ Polish pass (OpenRouter)...")
     final = draft
