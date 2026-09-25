@@ -1,0 +1,114 @@
+name: Daily Audiobook Pipeline
+
+on:
+  schedule:
+    - cron: '0 1 * * *'   # Run 1: 1:00 AM UTC (~6:30 AM IST)
+    - cron: '0 13 * * *'  # Run 2: safety re-check, 1:00 PM UTC (~6:30 PM IST)
+  workflow_dispatch: {}    # lets you trigger it manually from the Actions tab too
+
+jobs:
+  build-and-upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-noto
+
+      - name: Install Python deps
+        run: pip install -r requirements.txt
+
+      - name: Pick next topic from queue
+        id: queue
+        run: |
+          set +e
+          OUTPUT=$(python scripts/queue_manager.py)
+          CODE=$?
+          echo "$OUTPUT"
+          if [ $CODE -eq 2 ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          elif [ $CODE -ne 0 ]; then
+            exit $CODE
+          fi
+          TOPIC=$(echo "$OUTPUT" | grep 'TOPIC::' | sed 's/TOPIC:://')
+          GENRE=$(echo "$OUTPUT" | grep 'GENRE::' | sed 's/GENRE:://')
+          echo "topic=$TOPIC" >> "$GITHUB_OUTPUT"
+          echo "genre=$GENRE" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Generate story
+        if: steps.queue.outputs.skip != 'true'
+        env:
+          SARVAM_API_KEY: ${{ secrets.SARVAM_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          python scripts/generate_story.py "${{ steps.queue.outputs.topic }}" "${{ steps.queue.outputs.genre }}" | tee story_log.txt
+          echo "slug=$(tail -1 story_log.txt)" >> "$GITHUB_ENV"
+
+      - name: Generate voice (Edge-TTS)
+        if: steps.queue.outputs.skip != 'true'
+        run: python scripts/generate_voice.py "$slug" "${{ steps.queue.outputs.genre }}"
+
+      - name: Generate scene images + thumbnail
+        if: steps.queue.outputs.skip != 'true'
+        run: python scripts/generate_image.py "$slug"
+
+      - name: Generate karaoke captions
+        if: steps.queue.outputs.skip != 'true'
+        continue-on-error: true   # non-critical: video still uploads without captions if this fails
+        run: python scripts/generate_captions.py "$slug"
+
+      - name: Render final video
+        if: steps.queue.outputs.skip != 'true'
+        run: python scripts/make_video.py "$slug" "${{ steps.queue.outputs.genre }}"
+
+      - name: Upload to YouTube (private + scheduled)
+        if: steps.queue.outputs.skip != 'true'
+        env:
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+        run: python scripts/upload_youtube.py "$slug"
+
+      - name: Commit updated topics.csv + queue status
+        if: steps.queue.outputs.skip != 'true'
+        run: |
+          git config user.name "audiobook-bot"
+          git config user.email "bot@sayjeeta.local"
+          git add topics.csv queue/status.json
+          git commit -m "Auto: processed story $slug" || echo "nothing to commit"
+          git push
+
+      # --- Everything below runs regardless of success/failure ---
+
+      - name: Upload debug logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failure-logs-${{ github.run_id }}
+          path: |
+            story_log.txt
+            voices/*_failed_segments.json
+            stories/*.json
+          retention-days: 7
+          if-no-files-found: ignore
+
+      # Optional: get a Telegram ping the moment a run fails, instead of finding out days
+      # later. Skipped automatically if you haven't added these two secrets.
+      - name: Notify on failure (Telegram)
+        if: failure() && env.TELEGRAM_BOT_TOKEN != ''
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" \
+            -d text="⚠️ Sayjeeta Stories pipeline failed: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"

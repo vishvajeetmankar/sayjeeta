@@ -1,0 +1,12 @@
+stories/*.json
+voices/*
+images/*.png
+images/*.json
+thumbnails/*.png
+captions/*.ass
+videos/*.mp4
+videos/_tmp/
+story_log.txt
+scripts/client_secret.json
+*.pyc
+__pycache__/
