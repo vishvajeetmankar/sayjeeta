@@ -1,6 +1,9 @@
+# scripts/generate_story.py
+
+```python
 """
 Step 1: Generate the Hindi story.
-- Draft pass: Sarvam-M (free, Hindi-native grammar)
+- Draft pass: Sarvam-105B (free tier, Hindi-native grammar, v1 endpoint)
 - Polish pass: OpenRouter free model (sharpens hook + retention beats)
 Output: stories/<slug>.json
 
@@ -16,11 +19,13 @@ import os, json, re, sys, time, requests
 SARVAM_API_KEY = os.environ["SARVAM_API_KEY"]
 OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
 
-# v2 endpoint supports sarvam-30b / sarvam-105b with the OpenAI-compatible shape.
-# NOTE: "sarvam-m" (the old 24B model) is legacy and has been the source of 400 errors
-# for some accounts -- sarvam-30b is the currently recommended default model.
-SARVAM_URL = "https://api.sarvam.ai/v2/chat/completions"
-SARVAM_MODEL = "sarvam-30b"
+# NOTE ON ENDPOINT/MODEL: v2/chat/completions returned "this endpoint is currently in beta
+# and not available" for this account (beta access is opt-in per Sarvam account, not granted
+# by default). Switched to v1/chat/completions, which is generally available and serves
+# sarvam-105b / sarvam-105b-conversations. If you later get v2 beta access and want the
+# cheaper/faster sarvam-30b, change both SARVAM_URL and SARVAM_MODEL together.
+SARVAM_URL = "https://api.sarvam.ai/v1/chat/completions"
+SARVAM_MODEL = "sarvam-105b"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 REQUIRED_KEYS = ["title_hindi", "hook_line", "story_script", "description_hindi",
@@ -120,7 +125,7 @@ def main(topic: str, genre: str):
         template = f.read()
     prompt = template.format(topic=topic, genre=genre)
 
-    print("→ Draft pass (Sarvam-M)...")
+    print(f"→ Draft pass ({SARVAM_MODEL})...")
     draft_raw = call_sarvam(prompt)          # hard-fails the whole run if this errors -- correct,
     draft = extract_json(draft_raw)          # there's no usable story without it
     validate_story(draft)
@@ -152,3 +157,4 @@ if __name__ == "__main__":
     except StoryGenError as e:
         print(f"❌ STORY GENERATION FAILED: {e}")
         sys.exit(1)
+```
