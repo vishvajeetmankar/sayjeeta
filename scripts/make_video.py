@@ -1,5 +1,3 @@
-# scripts/make_video.py
-
 """
 Step 5: Assemble the final video from MULTIPLE scene images (not one static image --
 see README's YouTube policy section for why this matters for monetization).
@@ -62,6 +60,14 @@ def concat_with_crossfade(clip_paths: list, durations: list, out_path: str, fade
     if len(clip_paths) == 1:
         os.system(f'cp "{clip_paths[0]}" "{out_path}"')
         return os.path.exists(out_path)
+
+    # Clamp the crossfade duration to a fraction of the SHORTEST clip. A fixed 1.0s fade
+    # against a very short scene (e.g. a scene that only got ~1-2s of the story's runtime)
+    # can push the xfade `offset` negative or exceed the clip's own length, which ffmpeg
+    # rejects outright ("Error initializing filter 'xfade'" / negative offset). Since
+    # build_scene_clip() already enforces a 1.0s minimum per scene, 0.3s is a safe fade
+    # that always fits even in the worst case.
+    fade = min(fade, min(durations) * 0.3)
 
     inputs = []
     for p in clip_paths:
