@@ -1,6 +1,5 @@
 # scripts/generate_story.py
 
-```python
 """
 Step 1: Generate the Hindi story.
 - Draft pass: Sarvam-105B (free tier, Hindi-native grammar, v1 endpoint)
@@ -157,4 +156,3 @@ if __name__ == "__main__":
     except StoryGenError as e:
         print(f"❌ STORY GENERATION FAILED: {e}")
         sys.exit(1)
-```
