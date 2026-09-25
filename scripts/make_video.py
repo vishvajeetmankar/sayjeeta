@@ -1,3 +1,6 @@
+# scripts/make_video.py
+
+```python
 """
 Step 5: Assemble the final video from MULTIPLE scene images (not one static image --
 see README's YouTube policy section for why this matters for monetization).
@@ -150,11 +153,16 @@ def main(slug: str, genre: str):
         vf += f",ass={caption_path}"
 
     if bgm_path:
+        # Input order below is: 0=concat_path(video only, no audio), 1=voice_path, 2=bgm_path.
+        # Bug fixed: this used to reference [0:a] for the voice and [1:a] for the BGM loop,
+        # but input 0 (the video-only concat) has NO audio stream at all -- ffmpeg would fail
+        # with "Stream specifier ':a' in filtergraph ... matches no streams". Voice is input 1,
+        # BGM is input 2.
         filter_complex = (
-            f"[1:a]aloop=loop=-1:size=2e9,atrim=0:{duration}[bgm_loop];"
+            f"[2:a]aloop=loop=-1:size=2e9,atrim=0:{duration}[bgm_loop];"
             f"[bgm_loop]volume=0.10[bgm_low];"
-            f"[0:a][bgm_low]sidechaincompress=threshold=0.05:ratio=8:attack=5:release=300[bgm_ducked];"
-            f"[0:a][bgm_ducked]amix=inputs=2:duration=first:weights=1 1[aout]"
+            f"[1:a][bgm_low]sidechaincompress=threshold=0.05:ratio=8:attack=5:release=300[bgm_ducked];"
+            f"[1:a][bgm_ducked]amix=inputs=2:duration=first:weights=1 1[aout]"
         )
         cmd = [
             "ffmpeg", "-y", "-i", concat_path, "-i", voice_path, "-i", bgm_path,
@@ -189,3 +197,4 @@ if __name__ == "__main__":
     slug_arg = sys.argv[1]
     genre_arg = sys.argv[2] if len(sys.argv) > 2 else "mystery"
     main(slug_arg, genre_arg)
+```
