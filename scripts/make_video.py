@@ -1,6 +1,5 @@
 # scripts/make_video.py
 
-```python
 """
 Step 5: Assemble the final video from MULTIPLE scene images (not one static image --
 see README's YouTube policy section for why this matters for monetization).
@@ -197,4 +196,3 @@ if __name__ == "__main__":
     slug_arg = sys.argv[1]
     genre_arg = sys.argv[2] if len(sys.argv) > 2 else "mystery"
     main(slug_arg, genre_arg)
-```
