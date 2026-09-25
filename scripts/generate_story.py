@@ -1,5 +1,3 @@
-# scripts/generate_story.py
-
 """
 Step 1: Generate the Hindi story.
 - Draft pass: Sarvam-105B (free tier, Hindi-native grammar, v1 endpoint)
@@ -53,7 +51,19 @@ def _post_with_retry(url, headers, payload, label, max_retries=3):
                 print(f"  [{label}] {resp.status_code} response body: {resp.text[:1000]}")
                 raise StoryGenError(f"{label} rejected the request ({resp.status_code}): {resp.text[:500]}")
             resp.raise_for_status()  # covers 5xx -> falls into the except block below and retries
-            return resp.json()["choices"][0]["message"]["content"]
+            message = resp.json()["choices"][0]["message"]
+            # ROOT CAUSE of "TypeError: expected string or bytes-like object, got 'NoneType'":
+            # reasoning-capable models (sarvam-105b included) sometimes put the actual text in
+            # `reasoning_content` and leave `content` as None (e.g. when thinking mode is on).
+            # Returning None here used to flow straight into extract_json()'s re.search(None)
+            # and crash with an unclear TypeError instead of a clear, catchable error.
+            content = message.get("content") or message.get("reasoning_content")
+            if not content:
+                raise StoryGenError(
+                    f"{label} response had no usable text in 'content' or 'reasoning_content'. "
+                    f"Full message object: {json.dumps(message, ensure_ascii=False)[:500]}"
+                )
+            return content
         except StoryGenError:
             raise  # 4xx: don't retry, don't swallow -- surface immediately
         except requests.exceptions.RequestException as e:
@@ -68,7 +78,9 @@ def call_sarvam(prompt: str) -> str:
         SARVAM_URL,
         {"api-subscription-key": SARVAM_API_KEY, "Content-Type": "application/json"},
         {"model": SARVAM_MODEL, "messages": [{"role": "user", "content": prompt}],
-         "temperature": 0.85, "max_tokens": 6000},
+         "temperature": 0.85, "max_tokens": 6000,
+         "reasoning_effort": None},  # disable thinking mode -- keeps output fully in
+                                      # 'content' instead of splitting into 'reasoning_content'
         "Sarvam",
     )
 
@@ -136,7 +148,11 @@ def main(topic: str, genre: str):
         polished = extract_json(polished_raw)
         validate_story(polished)
         final = polished
-    except StoryGenError as e:
+    except Exception as e:
+        # Widened from `except StoryGenError` -- the polish pass is explicitly optional
+        # (we already have a valid draft), so ANY failure here (malformed response, a
+        # library raising something other than StoryGenError, etc.) should fall back to
+        # the draft instead of crashing the whole run over a "nice to have" step.
         print(f"⚠️  Polish pass failed or returned invalid data ({e}). Falling back to unpolished draft.")
 
     slug = slugify(final.get("title_hindi", "story"))
