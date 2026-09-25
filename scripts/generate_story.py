@@ -16,7 +16,11 @@ import os, json, re, sys, time, requests
 SARVAM_API_KEY = os.environ["SARVAM_API_KEY"]
 OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
 
-SARVAM_URL = "https://api.sarvam.ai/v1/chat/completions"
+# v2 endpoint supports sarvam-30b / sarvam-105b with the OpenAI-compatible shape.
+# NOTE: "sarvam-m" (the old 24B model) is legacy and has been the source of 400 errors
+# for some accounts -- sarvam-30b is the currently recommended default model.
+SARVAM_URL = "https://api.sarvam.ai/v2/chat/completions"
+SARVAM_MODEL = "sarvam-30b"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 REQUIRED_KEYS = ["title_hindi", "hook_line", "story_script", "description_hindi",
@@ -26,6 +30,12 @@ class StoryGenError(Exception):
     pass
 
 def _post_with_retry(url, headers, payload, label, max_retries=3):
+    """
+    Retries only TRANSIENT failures (timeouts, connection errors, 429, 5xx).
+    A 4xx (400/401/403/404) means the request itself is wrong -- retrying it verbatim
+    3 times just wastes time and hides the real problem, so those fail immediately with
+    the response body printed (that body is where the actual "why" lives).
+    """
     last_err = None
     for attempt in range(1, max_retries + 1):
         try:
@@ -35,8 +45,13 @@ def _post_with_retry(url, headers, payload, label, max_retries=3):
                 print(f"  [{label}] rate limited (429), waiting {wait}s...")
                 time.sleep(wait)
                 continue
-            resp.raise_for_status()
+            if 400 <= resp.status_code < 500:
+                print(f"  [{label}] {resp.status_code} response body: {resp.text[:1000]}")
+                raise StoryGenError(f"{label} rejected the request ({resp.status_code}): {resp.text[:500]}")
+            resp.raise_for_status()  # covers 5xx -> falls into the except block below and retries
             return resp.json()["choices"][0]["message"]["content"]
+        except StoryGenError:
+            raise  # 4xx: don't retry, don't swallow -- surface immediately
         except requests.exceptions.RequestException as e:
             last_err = e
             wait = 2 ** attempt
@@ -48,7 +63,7 @@ def call_sarvam(prompt: str) -> str:
     return _post_with_retry(
         SARVAM_URL,
         {"api-subscription-key": SARVAM_API_KEY, "Content-Type": "application/json"},
-        {"model": "sarvam-m", "messages": [{"role": "user", "content": prompt}],
+        {"model": SARVAM_MODEL, "messages": [{"role": "user", "content": prompt}],
          "temperature": 0.85, "max_tokens": 6000},
         "Sarvam",
     )
@@ -127,7 +142,7 @@ def main(topic: str, genre: str):
         json.dump(final, f, ensure_ascii=False, indent=2)
 
     print(f"✅ Story saved: {out_path} ({len(final['scenes'])} scenes)")
-    print(slug)  # last stdout line = slug, captured by the GitHub Actions step
+    print(f"SLUG::{slug}")  # explicit marker, grepped by the workflow -- never confused with a log/error line
 
 if __name__ == "__main__":
     topic_arg = sys.argv[1]
