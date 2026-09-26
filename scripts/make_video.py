@@ -203,7 +203,7 @@ def main(slug: str, genre: str):
         escaped_font = font_path.replace(":", r"\:")
         vf += (
             f",drawtext=fontfile='{escaped_font}':text='{WATERMARK_TEXT}':fontsize=34:"
-            f"fontcolor=white:box=1:boxcolor=black@0.45:boxborderw=14:"
+            f"fontcolor=white:box=1:boxcolor=black@0.85:boxborderw=14:"
             f"x=w-tw-40:y=h-th-40"
         )
 
@@ -215,7 +215,7 @@ def main(slug: str, genre: str):
         # BGM is input 2.
         filter_complex = (
             f"[2:a]aloop=loop=-1:size=2e9,atrim=0:{duration}[bgm_loop];"
-            f"[bgm_loop]volume=0.10[bgm_low];"
+            f"[bgm_loop]volume=0.15[bgm_low];"
             f"[1:a][bgm_low]sidechaincompress=threshold=0.05:ratio=8:attack=5:release=300[bgm_ducked];"
             f"[1:a][bgm_ducked]amix=inputs=2:duration=first:weights=1 1[aout]"
         )
