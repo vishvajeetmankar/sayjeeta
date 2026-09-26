@@ -6,6 +6,14 @@ on:
     - cron: '0 13 * * *'  # Run 2: safety re-check, 1:00 PM UTC (~6:30 PM IST)
   workflow_dispatch: {}    # lets you trigger it manually from the Actions tab too
 
+# Without this, github-actions[bot]'s auto-generated token defaults to read-only on repos
+# where "Workflow permissions" is set to "Read repository contents" (Settings -> Actions ->
+# General -> Workflow permissions) -- that default is exactly what caused the 403 on
+# `git push` in the commit step below. This line grants this specific workflow write access
+# without you having to change the repo-wide setting (which would apply to every workflow).
+permissions:
+  contents: write
+
 jobs:
   build-and-upload:
     runs-on: ubuntu-latest
