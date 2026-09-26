@@ -5,7 +5,9 @@ Fixes two complaints with the old single-line captions:
 1. Captions were too large and each line just flashed on/off with nothing to anchor the eye.
 2. There was no sense of continuous flow.
 
-New layout, for every chunk of MAX_WORDS_PER_LINE words:
+New layout, for every chunk of 3-5 words (random per chunk, and cut short immediately at a
+sentence-ending punctuation mark even if the target count isn't reached yet -- see
+chunk_words()):
   - CENTER slot: the chunk currently being spoken -- full size, full opacity, karaoke
     word-highlight (the active word pops in yellow, same as before).
   - ABOVE slot: the PREVIOUS chunk (just finished) -- smaller, lower opacity, faded in/out,
@@ -26,11 +28,13 @@ ERROR HANDLING:
   fails to load (e.g. low memory on the free GitHub runner).
 Output: captions/<slug>.ass
 """
-import sys, os, json
+import sys, os, json, random
 from faster_whisper import WhisperModel
 import pysubs2
 
-MAX_WORDS_PER_LINE = 3
+MIN_WORDS_PER_LINE = 3
+MAX_WORDS_PER_LINE = 5
+SENTENCE_END_CHARS = (".", "?", "!", "।", "…")
 
 # Noto Sans is what's actually installed on the GitHub runner (via `apt-get install fonts-noto`
 # in the workflow) and, critically, has full Devanagari glyph coverage -- the previous
@@ -42,7 +46,7 @@ FONT_NAME = "Noto Sans"
 def build_styles(subs: pysubs2.SSAFile):
     center = pysubs2.SSAStyle()
     center.fontname = FONT_NAME
-    center.fontsize = 58
+    center.fontsize = 68  # raised from 58 -- was reported as too small in the 3-line layout
     center.bold = True
     center.primarycolor = pysubs2.Color(255, 255, 255)
     center.outlinecolor = pysubs2.Color(0, 0, 0)
@@ -54,7 +58,7 @@ def build_styles(subs: pysubs2.SSAFile):
 
     context = pysubs2.SSAStyle()
     context.fontname = FONT_NAME
-    context.fontsize = 34
+    context.fontsize = 42  # raised from 34
     context.bold = True
     context.primarycolor = pysubs2.Color(255, 255, 255)
     context.outlinecolor = pysubs2.Color(0, 0, 0)
@@ -63,6 +67,25 @@ def build_styles(subs: pysubs2.SSAFile):
     context.alignment = 2
     subs.styles["Above"] = context
     subs.styles["Below"] = context.copy()
+
+def chunk_words(words: list) -> list:
+    """
+    Groups words into lines of a RANDOM 3-5 word target (not a fixed count), and cuts a line
+    short immediately whenever a word ends in sentence-final punctuation -- even if the random
+    target hasn't been reached yet -- so a caption line never straddles a sentence boundary.
+    """
+    chunks, current = [], []
+    target = random.randint(MIN_WORDS_PER_LINE, MAX_WORDS_PER_LINE)
+    for w in words:
+        current.append(w)
+        ends_sentence = w["word"].strip().endswith(SENTENCE_END_CHARS)
+        if ends_sentence or len(current) >= target:
+            chunks.append(current)
+            current = []
+            target = random.randint(MIN_WORDS_PER_LINE, MAX_WORDS_PER_LINE)
+    if current:
+        chunks.append(current)
+    return chunks
 
 def make_karaoke_text(words: list) -> str:
     parts = []
@@ -104,8 +127,9 @@ def main(slug: str):
         print("⚠️  Transcription produced zero words -- skipping captions for this video.")
         return
 
-    # Group into fixed-size chunks (each chunk = one "line" that will occupy center/above/below)
-    chunks = [words[i:i + MAX_WORDS_PER_LINE] for i in range(0, len(words), MAX_WORDS_PER_LINE)]
+    # Group into variable-length chunks (3-5 words, cut early at sentence boundaries) -- each
+    # chunk = one "line" that will occupy center/above/below
+    chunks = chunk_words(words)
 
     subs = pysubs2.SSAFile()
     build_styles(subs)
@@ -118,8 +142,8 @@ def main(slug: str):
     subs.info["PlayResY"] = "1080"
 
     CENTER_Y = 1080 - 160        # matches the "Center" style's alignment=2 + marginv=160
-    ABOVE_Y = CENTER_Y - 85      # smaller y = higher on screen = the line that just finished
-    BELOW_Y = CENTER_Y + 70      # larger y = lower on screen = the line coming up next
+    ABOVE_Y = CENTER_Y - 100     # smaller y = higher on screen = the line that just finished
+    BELOW_Y = CENTER_Y + 85      # larger y = lower on screen = the line coming up next
 
     FADE = r"{\fad(200,250)}"  # quick fade in/out for the context lines -- this is what gives
                                 # the "one by one fading" motion feel the user asked for
