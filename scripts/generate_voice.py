@@ -23,6 +23,20 @@ Hindi-audio-story creators use with any TTS engine):
   [EXCITED]  faster, higher pitch
   [SAD]      slower, slightly lower pitch
 
+HUMANIZATION (edge-tts has no SSML/<break> support anymore -- Microsoft blocks custom SSML
+as of v5+, so only rate/volume/pitch-per-call are available; everything below works within
+that real constraint rather than pretending it doesn't exist):
+- Small random jitter (+/-3% rate, +/-2Hz pitch, +/-4% volume) is added on top of every
+  segment's emotion-based values, so two [NORMAL] lines never sound EXACTLY identical the way
+  a fixed rate/pitch would -- exact repetition is a big part of what reads as "robotic".
+- A short silence gap is inserted between every segment: longer (300-450ms) after a sentence
+  actually ends (. ? ! ।), shorter (80-160ms) mid-thought -- simulating natural breathing/
+  speech rhythm that continuous back-to-back TTS clips don't have.
+Even with this, understand the ceiling: edge-tts is a free, general-purpose neural voice, not
+a performance/acting model. This narrows the gap, it doesn't erase it. If "still sounds AI"
+after this, the real fix is a paid expressive-TTS engine (e.g. Sarvam Bulbul) -- worth
+knowing since Bulbul was intentionally skipped earlier for cost.
+
 ERROR HANDLING:
 - Each segment synth retries up to 3x (Edge-TTS occasionally drops the websocket connection)
 - A segment that fails all retries is SKIPPED with a loud warning + written into
@@ -30,9 +44,12 @@ ERROR HANDLING:
   one line is recoverable; a crashed pipeline on day 1 of a daily schedule is not.
 - If more than 15% of segments fail, the whole step fails loudly (something systemic is wrong,
   better to stop and check than upload a half-broken audiobook).
+- Final concat now re-encodes (not stream-copies) -- silence clips and retried TTS segments
+  can have subtly different internal MP3 parameters, and stream-copy concat of mismatched MP3
+  streams can glitch at the seams; re-encoding guarantees a clean join.
 Output: voices/<slug>.mp3 + voices/<slug>_segments.json (timing map, used by captions/scenes)
 """
-import os, sys, json, asyncio, re, time
+import os, sys, json, asyncio, re, time, random
 import edge_tts
 
 VOICE_MAP = {
@@ -85,12 +102,13 @@ def parse_script(script: str):
         segments.append(("NARRATOR", "NORMAL", line))
     return segments
 
-async def synth_segment(text: str, voice: str, rate_pct: int, pitch: str, out_path: str, retries=3):
+async def synth_segment(text: str, voice: str, rate_pct: int, pitch: str, volume_pct: int, out_path: str, retries=3):
     rate_str = f"{'+' if rate_pct >= 0 else ''}{rate_pct}%"
+    volume_str = f"{'+' if volume_pct >= 0 else ''}{volume_pct}%"
     last_err = None
     for attempt in range(1, retries + 1):
         try:
-            communicate = edge_tts.Communicate(text, voice, rate=rate_str, pitch=pitch)
+            communicate = edge_tts.Communicate(text, voice, rate=rate_str, pitch=pitch, volume=volume_str)
             await communicate.save(out_path)
             if os.path.getsize(out_path) < 200:  # near-empty file = silent failure, edge-tts does this occasionally
                 raise IOError("Output file suspiciously small, treating as failed synth")
@@ -101,6 +119,16 @@ async def synth_segment(text: str, voice: str, rate_pct: int, pitch: str, out_pa
             await asyncio.sleep(2 * attempt)
     print(f"    ❌ segment permanently failed after {retries} retries: {last_err}")
     return False
+
+def make_silence(duration_sec: float, out_path: str) -> bool:
+    duration_sec = max(0.05, duration_sec)
+    ret = os.system(
+        f'ffmpeg -y -f lavfi -i anullsrc=r=24000:cl=mono -t {duration_sec:.3f} '
+        f'-q:a 9 -acodec libmp3lame "{out_path}" -loglevel error'
+    )
+    return ret == 0 and os.path.exists(out_path)
+
+SENTENCE_END_CHARS = (".", "?", "!", "।", "…")
 
 async def main(slug: str, genre: str):
     with open(f"stories/{slug}.json", encoding="utf-8") as f:
@@ -125,15 +153,29 @@ async def main(slug: str, genre: str):
     for i, (speaker, emotion, text) in enumerate(segments):
         voice = VOICE_MAP.get(speaker, "hi-IN-SwaraNeural")
         adj = EMOTION_ADJUST.get(emotion, EMOTION_ADJUST["NORMAL"])
-        rate_pct = BASE_RATE + adj["rate_delta"]
-        pitch_hz = base_pitch + int(adj["pitch"].replace("Hz", "").replace("+", ""))
+
+        # Small random jitter on top of the emotion preset so consecutive same-emotion lines
+        # don't come out with bit-for-bit identical prosody (see module docstring).
+        rate_pct = BASE_RATE + adj["rate_delta"] + random.randint(-3, 3)
+        pitch_hz = base_pitch + int(adj["pitch"].replace("Hz", "").replace("+", "")) + random.randint(-2, 2)
         pitch_str = f"{'+' if pitch_hz >= 0 else ''}{pitch_hz}Hz"
+        volume_pct = random.randint(-4, 4)
 
         part_path = f"voices/{slug}_parts/{i:04d}_{speaker}_{emotion}.mp3"
-        ok = await synth_segment(text, voice, rate_pct, pitch_str, part_path)
+        ok = await synth_segment(text, voice, rate_pct, pitch_str, volume_pct, part_path)
         if ok:
             part_files.append(part_path)
             segment_map.append({"index": i, "speaker": speaker, "emotion": emotion, "text": text, "file": part_path})
+
+            # Natural pause after this segment: longer if it actually ends a sentence,
+            # shorter if it's mid-thought -- see module docstring's HUMANIZATION section.
+            is_sentence_end = text.strip().endswith(SENTENCE_END_CHARS)
+            pause_dur = random.uniform(0.30, 0.45) if is_sentence_end else random.uniform(0.08, 0.16)
+            pause_path = f"voices/{slug}_parts/{i:04d}_pause.mp3"
+            if make_silence(pause_dur, pause_path):
+                part_files.append(pause_path)
+            # if silence generation fails, we just skip the pause rather than failing the run --
+            # a missing micro-pause is cosmetic, not worth aborting a whole video over
         else:
             failed.append({"index": i, "speaker": speaker, "text": text})
         print(f"  [{i}] {speaker}/{emotion}: {text[:40]}... {'OK' if ok else 'FAILED'}")
@@ -155,7 +197,11 @@ async def main(slug: str, genre: str):
             f.write(f"file '{os.path.abspath(p)}'\n")
 
     final_path = f"voices/{slug}.mp3"
-    ret = os.system(f'ffmpeg -y -f concat -safe 0 -i "{concat_list}" -c copy "{final_path}"')
+    # Re-encode rather than stream-copy: the silence clips and any retried TTS segments can
+    # have subtly different internal MP3 parameters, and `-c copy` concatenation of mismatched
+    # streams can glitch at the seams. Re-encoding to a single consistent format guarantees a
+    # clean join at a small, one-time CPU cost.
+    ret = os.system(f'ffmpeg -y -f concat -safe 0 -i "{concat_list}" -c:a libmp3lame -b:a 128k "{final_path}" -loglevel error')
     if ret != 0 or not os.path.exists(final_path):
         print("❌ ffmpeg concat failed -- see log above.")
         sys.exit(1)
