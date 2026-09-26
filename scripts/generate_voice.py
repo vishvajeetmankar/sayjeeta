@@ -1,9 +1,18 @@
 """
 Step 2: Convert the tagged script into voice using Edge-TTS (free, unlimited).
 
-Speaker -> voice:
-  [NARRATOR] / [FEMALE] -> hi-IN-SwaraNeural (female storyteller)
-  [MALE]                -> hi-IN-MadhurNeural (male, dialogue only)
+Speaker -> voice (FEMALE ONLY -- the channel is a single-narrator audiobook, no male voice.
+If a [MALE] tag ever slips through from an older cached prompt, it's mapped to the SAME
+female voice rather than crashing, so nothing breaks):
+  [NARRATOR] / [FEMALE] / [MALE] -> hi-IN-SwaraNeural
+
+A fixed, hardcoded self-introduction ("main Sayjeeta...") is spliced in as segment index 1,
+right after the hook (segment index 0 -- see prompts/story_prompt.txt rule 1, which requires
+the model to write the entire hook as one single tagged line specifically so this splice
+point is reliable). Keeping this line hardcoded rather than regenerated per-story is
+intentional: consistent channel branding matters more here than per-episode variety, and it
+guarantees the intro can never come out grammatically broken the way freshly-generated model
+text sometimes has.
 
 Emotion tag -> rate/pitch nudge (this is what makes it "perform" instead of "read" --
 Edge-TTS has no native emotion parameter, so we fake it with prosody, same trick real
@@ -29,9 +38,14 @@ import edge_tts
 VOICE_MAP = {
     "NARRATOR": "hi-IN-SwaraNeural",
     "FEMALE": "hi-IN-SwaraNeural",
-    "MALE": "hi-IN-MadhurNeural",
+    "MALE": "hi-IN-SwaraNeural",  # no male voice on this channel -- see module docstring
 }
-BASE_RATE = 15  # % -> 1.15x speed, per user's request to avoid flat/boring pacing
+BASE_RATE = 20  # % -> 1.2x speed (raised from 1.15x per user's request)
+
+FIXED_INTRO_TEXT = (
+    "नमस्कार दोस्तों! मैं हूं सजीता, और आप सुन रहे हैं Sayjeeta Stories। "
+    "आज की कहानी शुरू करते हैं।"
+)
 
 EMOTION_ADJUST = {
     "NORMAL":   {"rate_delta": 0,   "pitch": "+0Hz"},
@@ -96,6 +110,12 @@ async def main(slug: str, genre: str):
     if not segments:
         print("❌ No segments parsed from story_script -- aborting.")
         sys.exit(1)
+
+    # Splice the fixed brand intro right after segment 0 (the hook -- guaranteed to be a
+    # single segment by prompts/story_prompt.txt rule 1). If the model ever violates that
+    # rule and the "hook" ends up spanning multiple segments, this still just inserts the
+    # intro after the first one -- not perfect, but never crashes.
+    segments.insert(1, ("NARRATOR", "NORMAL", FIXED_INTRO_TEXT))
 
     base_pitch = GENRE_PITCH_BASE.get(genre, 0)
 
