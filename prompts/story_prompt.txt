@@ -50,9 +50,17 @@ STRICT RULES:
 
 5. Har 2-3 minute par ek chhota retention hook daalo.
 
-6. Story ko 6-8 distinct VISUAL SCENES mein socho (jaise ek film ke scenes) — beginning,
+6. Story ko 10-14 distinct VISUAL SCENES mein socho (jaise ek film ke scenes) — beginning,
    rising tension, midpoint twist, climax, ending — har scene ka apna alag visual mood ho,
-   ek hi jaisi image baar baar mat socho.
+   ek hi jaisi image baar baar mat socho. More scenes = more visual variety across the video,
+   so err toward 12-14 rather than the minimum of 10.
+
+6b. For each scene, ALSO give "stock_keywords_english": a short 2-4 word phrase of simple,
+    concrete, real-world nouns (e.g. "abandoned indian temple", "old woman crying", "dark
+    forest path") suitable for searching a REAL stock-photo library. This is different from
+    "image_prompt_english" (which is a rich cinematic prompt for an AI image generator) --
+    keep stock_keywords_english simple and literal, not artistic/descriptive, since it's used
+    for keyword search rather than generation.
 
 7. Ending emotional closure/twist ke saath ho, phir CTA: "agar ye kahani pasand aayi ho toh
    subscribe karo, agli kahani kal isi samay."
@@ -60,6 +68,12 @@ STRICT RULES:
 8. Koi real brand, exact real jagah ka naam, ya kisi existing movie/book/show ka naam mat lo.
    Fictional gaon/sheher/haveli ke naam banao (jaise "Rampur", "Kaali Haveli") — inspired by
    Indian settings but not copying any specific real named landmark.
+
+8b. CHARACTER NAMES MUST BE INDIAN — every character (narrator's story characters, not the
+    real-world brand names from rule 8) gets a common Indian first name. Examples of GOOD
+    names: Rohan, Arjun, Vikram, Aditya, Karan, Priya, Meera, Anjali, Kavita, Sneha, Rekha,
+    Dadi, Nani. NEVER use Western names (Jack, John, Mary, Sarah, David, etc.) for any
+    character under any circumstance, even a minor or briefly-mentioned one.
 
 9. Description mein ek line yeh honi chahiye (transparency ke liye, monetization policy ke
    according zaroori): "Yeh kahani AI tools ki madad se likhi aur record ki gayi hai, editorial
@@ -90,13 +104,10 @@ OUTPUT FORMAT (strict JSON):
   "story_script": "[SPEAKER][EMOTION]: text ... poori story is format mein, hook as ONE line per rule 1",
   "description_hindi": "per the description guidance above",
   "scenes": [
-    {{"scene_number": 1, "position_pct": 0, "image_prompt_english": "cinematic prompt for opening scene, English, 16:9, mood-specific"}},
-    {{"scene_number": 2, "position_pct": 15, "image_prompt_english": "..."}},
-    {{"scene_number": 3, "position_pct": 30, "image_prompt_english": "..."}},
-    {{"scene_number": 4, "position_pct": 45, "image_prompt_english": "..."}},
-    {{"scene_number": 5, "position_pct": 60, "image_prompt_english": "..."}},
-    {{"scene_number": 6, "position_pct": 75, "image_prompt_english": "..."}},
-    {{"scene_number": 7, "position_pct": 90, "image_prompt_english": "..."}}
+    {{"scene_number": 1, "position_pct": 0, "image_prompt_english": "cinematic prompt for opening scene, English, 16:9, mood-specific", "stock_keywords_english": "2-4 word real-world search phrase for this scene, e.g. 'old indian haveli night'"}},
+    {{"scene_number": 2, "position_pct": 8, "image_prompt_english": "...", "stock_keywords_english": "..."}},
+    {{"scene_number": 3, "position_pct": 16, "image_prompt_english": "...", "stock_keywords_english": "..."}},
+    "... continue with 10-14 total scenes, position_pct spread roughly evenly from 0 to ~90 ..."
   ],
   "thumbnail_prompt_english": "ek alag, zyada dramatic thumbnail-specific image prompt, English, high contrast, one clear focal subject",
   "tags_english": ["12-15 English tags per SEO guidance above"],
@@ -104,7 +115,7 @@ OUTPUT FORMAT (strict JSON):
   "category_id": "24"
 }}
 
-Sirf valid JSON return karo, kuch aur text nahi. scenes array mein hamesha 6-8 items hone chahiye.
+Sirf valid JSON return karo, kuch aur text nahi. scenes array mein hamesha 10-14 items hone chahiye.
 
 STRICT JSON-FORMATTING RULES (follow exactly, this output is parsed by a machine):
 - Return ONLY one valid JSON object. Nothing before it, nothing after it.
