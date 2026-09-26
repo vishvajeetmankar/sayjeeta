@@ -6,6 +6,12 @@ see README's YouTube policy section for why this matters for monetization).
   the total voice duration (from scenes[].position_pct)
 - Scenes are joined with 1-second crossfade transitions (xfade) instead of hard cuts --
   much less jarring for a 15-20 min listen
+- A subtle animated film-grain/vignette layer is blended over the whole video -- a cheap,
+  dependency-free way to add some motion-graphics texture on top of otherwise-static images
+  (real particle/vector animation would need an asset pipeline this project doesn't have yet)
+- A bold "Sayjeeta Stories" watermark is burned into the bottom-right corner -- this doubles
+  as branding AND covers Pollinations.ai's own small watermark, which `nologo=true` doesn't
+  reliably suppress
 - Karaoke captions burned in
 - Voice mixed with genre BGM, BGM sidechain-ducked under the voice
 
@@ -17,12 +23,15 @@ ERROR HANDLING:
   rendered WITHOUT captions rather than failing entirely -- a video with no captions is
   still fine to upload; a missing video is not
 - If BGM is missing, renders with voice-only audio rather than failing
+- If no usable bold font can be found for the watermark, the watermark is skipped rather
+  than failing the whole render over a cosmetic element
 - Final ffmpeg render step's return code is checked explicitly; a partial/corrupt output
   file is deleted so a broken video can never accidentally get uploaded
 """
 import os, sys, json, random, subprocess, glob
 
 TMP_DIR = "videos/_tmp"
+WATERMARK_TEXT = "Sayjeeta Stories"
 
 def get_audio_duration(path: str) -> float:
     out = subprocess.check_output([
@@ -30,6 +39,29 @@ def get_audio_duration(path: str) -> float:
         "-of", "default=noprint_wrappers=1:nokey=1", path
     ])
     return float(out.strip())
+
+def find_bold_font() -> str:
+    """
+    Resolves a real bold font FILE path for ffmpeg's drawtext filter (which needs an actual
+    file, not just a family name, unless ffmpeg was built with fontconfig -- not guaranteed
+    on every runner). Tries fc-match first (works with whatever's actually installed), falls
+    back to known common paths, and gives up gracefully rather than crashing the render.
+    """
+    try:
+        out = subprocess.check_output(
+            ["fc-match", "--format=%{file}", "Noto Sans Bold"], text=True, timeout=10
+        ).strip()
+        if out and os.path.exists(out):
+            return out
+    except Exception:
+        pass
+    for p in [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+    ]:
+        if os.path.exists(p):
+            return p
+    return None
 
 def pick_bgm(genre: str):
     candidates = glob.glob(f"music/{genre}/*.mp3")
@@ -153,9 +185,27 @@ def main(slug: str, genre: str):
     if not bgm_path:
         print(f"⚠️  No BGM found for genre '{genre}' (check /music/{genre}/) -- rendering voice-only audio.")
 
+    font_path = find_bold_font()
+    if not font_path:
+        print("⚠️  No bold font file found on this system -- skipping the watermark overlay.")
+
+    # Subtle animated grain: cheap, dependency-free stand-in for real motion-graphics texture
+    # on top of otherwise-static scene images. `noise` generates per-frame animated grain;
+    # blended in via `blend`'s all_opacity (NOT via an alpha-channel trick -- blend's "screen"
+    # mode ignores per-pixel alpha and only respects all_opacity, so that's the correct knob).
     vf = "format=yuv420p"
+    vf += ",split[bg][grain_src];[grain_src]noise=alls=20:allf=t+u,format=gray[grain];[bg][grain]blend=all_mode=screen:all_opacity=0.06"
     if use_captions:
         vf += f",ass={caption_path}"
+    if font_path:
+        # Bottom-right watermark with a semi-transparent backing box for legibility over any
+        # background, and to reliably cover Pollinations' own small watermark in that corner.
+        escaped_font = font_path.replace(":", r"\:")
+        vf += (
+            f",drawtext=fontfile='{escaped_font}':text='{WATERMARK_TEXT}':fontsize=34:"
+            f"fontcolor=white:box=1:boxcolor=black@0.45:boxborderw=14:"
+            f"x=w-tw-40:y=h-th-40"
+        )
 
     if bgm_path:
         # Input order below is: 0=concat_path(video only, no audio), 1=voice_path, 2=bgm_path.
