@@ -88,6 +88,8 @@ jobs:
 
       - name: Generate scene images + thumbnail
         if: success() && steps.queue.outputs.skip != 'true'
+        env:
+          PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
         run: python scripts/generate_image.py "$slug"
 
       - name: Generate karaoke captions
