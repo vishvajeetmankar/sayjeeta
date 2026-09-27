@@ -47,7 +47,7 @@ STORY_JSON_SCHEMA = {
         "description_hindi": {"type": "string"},
         "scenes": {
             "type": "array",
-            "minItems": 4,
+            "minItems": 8,
             "items": {
                 "type": "object",
                 "additionalProperties": False,
@@ -55,8 +55,9 @@ STORY_JSON_SCHEMA = {
                     "scene_number": {"type": "integer"},
                     "position_pct": {"type": "integer"},
                     "image_prompt_english": {"type": "string"},
+                    "stock_keywords_english": {"type": "string"},
                 },
-                "required": ["scene_number", "position_pct", "image_prompt_english"],
+                "required": ["scene_number", "position_pct", "image_prompt_english", "stock_keywords_english"],
             },
         },
         "thumbnail_prompt_english": {"type": "string"},
@@ -171,9 +172,9 @@ def validate_story(data: dict):
     missing = [k for k in REQUIRED_KEYS if k not in data]
     if missing:
         raise StoryGenError(f"Story JSON is missing required keys: {missing}")
-    if not isinstance(data["scenes"], list) or len(data["scenes"]) < 4:
-        raise StoryGenError(f"Expected at least 4 scenes, got {len(data.get('scenes', []))}. "
-                             f"Single/few-image stories risk YouTube's inauthentic-content policy.")
+    if not isinstance(data["scenes"], list) or len(data["scenes"]) < 8:
+        raise StoryGenError(f"Expected at least 8 scenes (target 10-14), got {len(data.get('scenes', []))}. "
+                             f"Too few scenes means too little visual variety across a 15-20 min video.")
     if len(data["story_script"]) < 500:
         raise StoryGenError("story_script looks too short (<500 chars) — likely a truncated/failed generation.")
 
